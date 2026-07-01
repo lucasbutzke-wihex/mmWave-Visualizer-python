@@ -1,14 +1,17 @@
-# from serialAsync import SerialReader
 # PySide2 Imports
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
-from PySide6.QtGui import QPalette, QColor
+# from PySide6.QtCore import Qt
+# from PySide6.QtWidgets import QApplication
+# from PySide6.QtGui import QPalette, QColor
 
 # Window Class
-from gui_core import Window
+# from gui_core import Window
+import asyncio
+import serial_asyncio_fast
 
-# Demo List
-from demo_defines import *
+# from serialAsync import SerialReader
+
+from cached_data import CachedDataType
+from serialAsync import SerialCore, handle_line
 
 import sys
 import os
@@ -23,39 +26,33 @@ log = logging.getLogger(__name__)
 sys.path.insert(1, os.path.abspath(os.getcwd()) + "\\common") # Uncomment for debug in VSCode or running from Applications_Visualizer dir
 sys.path.insert(1, '../common')
 
-# if __name__ == "__main__":
-#     print(SerialReader.mro)
+
+async def main():
+	try:
+		cliTransport, _ = await serial_asyncio_fast.create_serial_connection(
+            asyncio.get_running_loop(),
+			lambda: SerialCore(handle_line),
+            "/dev/ttyUSB0",      # Linux
+            baudrate=115200,
+        )
+		
+		# dataTransport, _ = await serial_asyncio_fast.create_serial_connection(
+        #     asyncio.get_running_loop(),
+        #     SerialCore,
+        #     "/dev/ttyUSB1",      # Linux
+        #     baudrate=912600,
+        # ) 
+
+		# dataTransport.reset_output_buffer()
+
+		try:
+			await asyncio.Future()  # Run forever
+		finally:
+			cliTransport.close()
+			# dataTransport.close()
+	
+	except Exception as e:
+		print(f"Exception {e}")
 
 if __name__ == '__main__':
-        for key in DEVICE_DEMO_DICT.keys():
-                DEVICE_DEMO_DICT[key]["demos"] = [x for x in DEVICE_DEMO_DICT[key]["demos"] if x in BUSINESS_DEMOS["Industrial"]]
-
-        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling)
-        app = QApplication(sys.argv)
-
-        if (len(sys.argv) >= 2 and sys.argv[1] == "dark"):
-                # Force the style to be the same on all OSs:
-                app.setStyle("Fusion")
-
-                # Now use a palette to switch to dark colors:
-                palette = QPalette()
-                palette.setColor(QPalette.Window, QColor(53, 53, 53))
-                palette.setColor(QPalette.WindowText, Qt.white)
-                palette.setColor(QPalette.Base, QColor(25, 25, 25))
-                palette.setColor(QPalette.AlternateBase, QColor(53, 53, 53))
-                palette.setColor(QPalette.ToolTipBase, Qt.black)
-                palette.setColor(QPalette.ToolTipText, Qt.white)
-                palette.setColor(QPalette.Text, Qt.white)
-                palette.setColor(QPalette.Button, QColor(53, 53, 53))
-                palette.setColor(QPalette.ButtonText, Qt.white)
-                palette.setColor(QPalette.BrightText, Qt.red)
-                palette.setColor(QPalette.Link, QColor(42, 130, 218))
-                palette.setColor(QPalette.Highlight, QColor(42, 130, 218))
-                palette.setColor(QPalette.HighlightedText, Qt.black)
-                app.setPalette(palette)
-
-        screen = app.primaryScreen()
-        size = screen.size()
-        main = Window(size=size, title="Industrial Visualizer")
-        main.show()
-        sys.exit(app.exec())
+	asyncio.run(main())
