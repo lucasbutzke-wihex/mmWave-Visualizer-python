@@ -6,18 +6,9 @@
 #include <fcntl.h>
 #include <string.h>
 
-#define NRESET_PIN "23" 
+#include "watchdog.h"
 
-typedef struct 
-{
-    double timeout;
-    double last_heartbeat;
-    int running;
-    pthread_mutex_t lock;
-    pthread_t thread_id;
-} RadarWatchdog;
-
-void gpio_export(const char *pin) // ativa pino
+void _gpio_export(const char *pin) // ativa pino
 {
     int fd = open("/sys/class/gpio/export", O_WRONLY);
 
@@ -27,7 +18,7 @@ void gpio_export(const char *pin) // ativa pino
     }
 }
 
-void gpio_set_direction(const char *pin, const char *dir) //define como input/output
+void _gpio_set_direction(const char *pin, const char *dir) //define como input/output
 {
     char path[50];
     snprintf(path, sizeof(path), "/sys/class/gpio/gpio%s/direction", pin);
@@ -39,7 +30,7 @@ void gpio_set_direction(const char *pin, const char *dir) //define como input/ou
     }
 }
 
-void gpio_write(const char *pin, const char *value) 
+void _gpio_write(const char *pin, const char *value) 
 {
     char path[50];
     snprintf(path, sizeof(path), "/sys/class/gpio/gpio%s/value", pin);
@@ -51,7 +42,7 @@ void gpio_write(const char *pin, const char *value)
     }
 }
 
-double get_current_time() // retorna tempo atual (s)
+double _get_current_time() // retorna tempo atual (s)
 {
     struct timeval tv;
     gettimeofday(&tv, NULL);
@@ -66,13 +57,13 @@ void watchdog_feed(RadarWatchdog *wdt) //grava tempo da ultima comunicação
     pthread_mutex_unlock(&wdt->lock);
 }
 
-void watchdog_force_reset() 
+void _watchdog_force_reset(const char *pin) 
 {
     printf("[WATCHDOG] !!! Alerta: 1s sem comunicação. Resetando radar !!!\n");
     
-    gpio_write(NRESET_PIN, "0");  // nRESET em LOW  -> Ativa Reset
+    gpio_write(pin, "0");  // nRESET em LOW  -> Ativa Reset
     usleep(100000);               // Espera 100ms
-    gpio_write(NRESET_PIN, "1");  // nRESET em HIGH -> Libera Radar
+    gpio_write(pin, "1");  // nRESET em HIGH -> Libera Radar
     
     printf("[WATCHDOG] reset enviado com sucesso\n");
 }
@@ -102,11 +93,13 @@ void* _watchdog_monitor(void *arg)
     return NULL;
 }
 
-void watchdog_start(RadarWatchdog *wdt, double timeout_val) {
-    gpio_export(NRESET_PIN);
+void watchdog_start(RadarWatchdog *wdt, const char *gpio_pin, double timeout_val) {
+    strncpy(wdt->pin, gpio_pin, sizeof(wdt->pin) - 1);
+
+    gpio_export(wdt->pin);
     usleep(50000); // pausa para o criar os arquivos do sysfs
-    gpio_set_direction(NRESET_PIN, "out");
-    gpio_write(NRESET_PIN, "1"); 
+    gpio_set_direction(wdt->pin, "out");
+    gpio_write(wdt->pin, "1"); 
 
     // Inicializa a estrutura
     wdt->timeout = timeout_val;
