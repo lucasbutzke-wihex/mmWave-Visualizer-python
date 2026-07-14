@@ -15,8 +15,8 @@
 #define PORT2_ACCUM_SIZE (BUFFER_SIZE * 16)
 #define POLL_IDLE_MS 200           // How long poll() may block when Port 1 is idle
 
-#define cliPort "/dev/ttyUSB1" // Port for sending commands/configuration
-#define dataPort "/dev/ttyUSB0" // Port for receiving passive data
+#define cliPort "/dev/ttyAMA0" // Port for sending commands/configuration - USB1
+#define dataPort "/dev/ttyAMA2" // Port for receiving passive data - USB0
 #define configFile "config_heatmap.cfg" // File to send to Port 1
 
 static volatile sig_atomic_t g_stop = 0;
