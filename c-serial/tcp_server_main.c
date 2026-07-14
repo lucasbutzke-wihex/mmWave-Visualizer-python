@@ -16,7 +16,7 @@
 
 #include "parser.h"
 #include "server.h"
-// #include "watchdog.h"
+#include "watchdog.h"
 
 
 #define TCP_SERVER_PORT 5001
@@ -408,8 +408,8 @@ static void accept_new_client(int listen_fd) {
 }
 
 int main() {
-    // RadarWatchdog wdt;
-    // watchdog_start(&wdt, "23", 1.0); //pino 23, 1s de timeout
+    RadarWatchdog wdt;
+    watchdog_start(&wdt, "21", 5.0); //pino 21, 5s de timeout
 
     const char *port1_path = dataPort; // config/command port
     const char *port2_path = cliPort ; // passive data listener port
@@ -556,7 +556,7 @@ int main() {
             ssize_t n = read(fd1, rx_buffer, sizeof(rx_buffer) - 1);
             if (n > 0) {
                 send_async_packet(PKT_TYPE_CLI_RESP, rx_buffer, n);
-                // watchdog_feed(&wdt);
+                watchdog_feed(&wdt);
 
                 if (state == PORT1_WAITING_RESPONSE) {
                     if (response_len + (size_t)n < sizeof(response_buffer)) {
@@ -591,7 +591,7 @@ int main() {
             ssize_t n = read(fd2, rx_buffer, sizeof(rx_buffer));
             if (n > 0) {
                 send_async_packet(PKT_TYPE_RADAR, rx_buffer, n);
-                // watchdog_feed(&wdt);
+                watchdog_feed(&wdt);
 
                 port2_feed(port2_accum, &port2_accum_len, rx_buffer, (size_t)n);
             } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
@@ -608,7 +608,7 @@ int main() {
             if (n > 0) {
                 send_async_packet(PKT_TYPE_CLI_RESP, rx_buffer, n);
             }
-            // watchdog_feed(&wdt);
+            watchdog_feed(&wdt);
         }
     }
 
@@ -617,6 +617,6 @@ int main() {
     close(listen_fd);
     if (fd1 >= 0) close(fd1);
     if (fd2 >= 0) close(fd2);
-    // watchdog_stop(&wdt);
+    watchdog_stop(&wdt);
     return 0;
 }
