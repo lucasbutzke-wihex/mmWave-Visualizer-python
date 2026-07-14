@@ -62,7 +62,7 @@ void watchdog_feed(RadarWatchdog *wdt) //grava tempo da ultima comunicação
 
 void _watchdog_force_reset(const char *pin) 
 {
-    printf("[WATCHDOG] !!! Alerta: 1s sem comunicação. Resetando radar !!!\n");
+    printf("[WATCHDOG] !!! Alerta: sem comunicação. Resetando radar !!!\n");
     
     _gpio_write(pin, "0");  // nRESET em LOW  -> Ativa Reset
     usleep(100000);               // Espera 100ms
