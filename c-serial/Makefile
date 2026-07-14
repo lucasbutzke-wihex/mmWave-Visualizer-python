@@ -11,3 +11,6 @@ asm:
 
 claude:
 	$(CC) $(FLAGS) -o claude claude_tcp_server.c
+
+main_test:
+	$(CC) $(FLAGS) -o tcp_server_main watchdog.c tcp_server_main.c
