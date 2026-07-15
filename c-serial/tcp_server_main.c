@@ -409,7 +409,7 @@ static void accept_new_client(int listen_fd) {
 
 int main() {
     RadarWatchdog wdt;
-    watchdog_start(&wdt, "21", 5.0); //pino 21, 5s de timeout
+    watchdog_start(&wdt, 21, 5.0); //pino 21, 5s de timeout
 
     const char *port1_path = dataPort; // config/command port
     const char *port2_path = cliPort ; // passive data listener port

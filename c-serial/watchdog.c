@@ -5,43 +5,82 @@
 #include <sys/time.h>
 #include <fcntl.h>
 #include <string.h>
+#include <gpiod.h>
 
 #include "watchdog.h"
 
-void _gpio_export(const char *pin) // ativa pino
-{
-    int fd = open("/sys/class/gpio/export", O_WRONLY);
+static struct gpiod_chip *chip = NULL;
+static struct gpiod_line_settings *settings = NULL;
+static struct gpiod_line_config *line_cfg = NULL;
+static struct gpiod_request_config *req_cfg = NULL;
+static struct gpiod_line_request *request = NULL;
 
-    if (fd != -1) 
-    { 
-        write(fd, pin, strlen(pin)); 
-        close(fd); 
+void _gpio_export()
+{
+    chip = gpiod_chip_open("/dev/gpiochip4");
+    if (!chip) {
+        chip = gpiod_chip_open("/dev/gpiochip0");
+        if (!chip) {
+            perror("[WATCHDOG] Erro ao abrir chip de GPIO");
+            return;
+        }
     }
 }
 
-void _gpio_set_direction(const char *pin, const char *dir) //define como input/output
+void _gpio_config(unsigned int offset)
 {
-    char path[50];
-    snprintf(path, sizeof(path), "/sys/class/gpio/gpio%s/direction", pin);
-    int fd = open(path, O_WRONLY);
+    if (!chip) {
+        return; 
+    }
+    
+    settings = gpiod_line_settings_new();
+    if (!settings) {
+        perror("[WATCHDOG] Erro ao criar configurações");
+        return;
+    }
 
-    if (fd != -1) 
-    { 
-        write(fd, dir, strlen(dir)); 
-        close(fd); 
+    gpiod_line_settings_set_direction(settings, GPIOD_LINE_DIRECTION_OUTPUT); // define como saida
+    gpiod_line_settings_set_output_value(settings, GPIOD_LINE_VALUE_ACTIVE); // define nivel logico alto
+
+    line_cfg = gpiod_line_config_new();
+    if (!line_cfg) {
+        perror("[WATCHDOG] Erro ao criar configuração da linha");
+        gpiod_line_settings_free(settings);
+        return;
+    }
+
+    if (gpiod_line_config_add_line_settings(line_cfg, &offset, 1, settings) < 0) {
+        perror("[WATCHDOG] Erro ao adicionar configurações da linha");
+        gpiod_line_config_free(line_cfg);
+        gpiod_line_settings_free(settings);
+        return;
+    }
+
+    //offset de pino
+    req_cfg = gpiod_request_config_new();
+    if (!req_cfg) {
+         perror("[WATCHDOG] Erro ao criar request config");
+         gpiod_line_config_free(line_cfg);
+         gpiod_line_settings_free(settings);
+         return;
+    }
+    gpiod_request_config_set_consumer(req_cfg, "RadarWatchdog");
+
+    // solicita o controle do pino
+    request = gpiod_chip_request_lines(chip, req_cfg, line_cfg);
+    if (!request) {
+        perror("[WATCHDOG] Erro ao requisitar linha GPIO");
+        gpiod_request_config_free(req_cfg);
+        gpiod_line_config_free(line_cfg);
+        gpiod_line_settings_free(settings);
+        return;
     }
 }
 
-void _gpio_write(const char *pin, const char *value) 
+void _gpio_write(unsigned int offset, enum gpiod_line_value value) 
 {
-    char path[50];
-    snprintf(path, sizeof(path), "/sys/class/gpio/gpio%s/value", pin);
-    int fd = open(path, O_WRONLY);
-
-    if (fd != -1) 
-    { 
-        write(fd, value, strlen(value)); 
-        close(fd); 
+    if (request) {
+        gpiod_line_request_set_value(request, offset, value);
     }
 }
 
@@ -60,13 +99,13 @@ void watchdog_feed(RadarWatchdog *wdt) //grava tempo da ultima comunicação
     pthread_mutex_unlock(&wdt->lock);
 }
 
-void _watchdog_force_reset(const char *pin) 
+void _watchdog_force_reset(unsigned int offset) 
 {
     printf("[WATCHDOG] !!! Alerta: sem comunicação. Resetando radar !!!\n");
     
-    _gpio_write(pin, "0");  // nRESET em LOW  -> Ativa Reset
+    _gpio_write(offset, GPIOD_LINE_VALUE_INACTIVE);  // nRESET em LOW  -> Ativa Reset
     usleep(100000);               // Espera 100ms
-    _gpio_write(pin, "1");  // nRESET em HIGH -> Libera Radar
+    _gpio_write(offset, GPIOD_LINE_VALUE_ACTIVE); // nRESET em HIGH -> Libera Radar
     
     printf("[WATCHDOG] reset enviado com sucesso\n");
 }
@@ -85,7 +124,7 @@ void* _watchdog_monitor(void *arg)
         
         if (time_since_last_feed > wdt->timeout) 
         {
-            _watchdog_force_reset(wdt->pin);
+            _watchdog_force_reset(wdt->gpio_offset);
             
             pthread_mutex_lock(&wdt->lock);
             wdt->last_heartbeat = _get_current_time() + 3.0; //3s ate proximo reset ser possivel
@@ -96,13 +135,12 @@ void* _watchdog_monitor(void *arg)
     return NULL;
 }
 
-void watchdog_start(RadarWatchdog *wdt, const char *gpio_pin, double timeout_val) {
-    strncpy(wdt->pin, gpio_pin, sizeof(wdt->pin) - 1);
+void watchdog_start(RadarWatchdog *wdt, unsigned int gpio_offset, double timeout_val) {
+    wdt->gpio_offset = gpio_offset;
 
-    _gpio_export(wdt->pin);
-    usleep(50000); // pausa para o criar os arquivos do sysfs
-    _gpio_set_direction(wdt->pin, "out");
-    _gpio_write(wdt->pin, "1"); 
+    _gpio_export();
+    usleep(50000); 
+    _gpio_config(gpio_offset);
 
     // Inicializa a estrutura
     wdt->timeout = timeout_val;
@@ -119,5 +157,10 @@ void watchdog_stop(RadarWatchdog *wdt)
     wdt->running = 0;
     pthread_join(wdt->thread_id, NULL); // espera a thread finalizar
     pthread_mutex_destroy(&wdt->lock);
+    gpiod_line_request_release(request);
+    gpiod_request_config_free(req_cfg);
+    gpiod_line_config_free(line_cfg);
+    gpiod_line_settings_free(settings);
+    gpiod_chip_close(chip);
     printf("[WATCHDOG] Monitor parado\n");
 }

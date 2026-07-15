@@ -9,10 +9,10 @@ typedef struct {
     int running;
     pthread_mutex_t lock;
     pthread_t thread_id;
-    char pin[8];
+    unsigned int gpio_offset;
 } RadarWatchdog;
 
-void watchdog_start(RadarWatchdog *wdt, const char *gpio_pin, double timeout_val);
+void watchdog_start(RadarWatchdog *wdt, unsigned int gpio_offset, double timeout_val);
 void watchdog_feed(RadarWatchdog *wdt);
 void watchdog_stop(RadarWatchdog *wdt);
 
