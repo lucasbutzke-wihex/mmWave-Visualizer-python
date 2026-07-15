@@ -26,6 +26,8 @@
 #define PKT_TYPE_RADAR    2
 #define PKT_TYPE_SYSTEM   99
 
+volatile int g_needs_reconfig = 0;
+
 typedef struct __attribute__((packed)) {
     uint32_t packet_type;
     uint32_t sequence_num;
@@ -307,6 +309,8 @@ static void handle_client_command(const char *line, size_t len, int fd1, int fd2
         tcflush(fd1, TCIOFLUSH);
         tcflush(fd2, TCIOFLUSH);
         send_async_packet(PKT_TYPE_SYSTEM, "RESET_ACK", 9);
+
+        g_needs_reconfig = 1;
     } else {
         char cmd_buf[CMD_LINE_BUF_SIZE + 1];
         size_t copy_len = (len < CMD_LINE_BUF_SIZE) ? len : CMD_LINE_BUF_SIZE;
@@ -472,6 +476,27 @@ int main() {
     printf("Protocol Engine Server (TCP) running on port %d...\n", TCP_SERVER_PORT);
 
     while (!g_stop) {
+        if (g_needs_reconfig) {
+            printf("\n[RECONFIG] Reiniciando rotina de configuração do radar...\n");
+            
+            tcflush(fd1, TCIOFLUSH);
+            tcflush(fd2, TCIOFLUSH);
+            port2_accum_len = 0;
+            memset(port2_accum, 0, sizeof(port2_accum));
+
+            fseek(file, 0, SEEK_SET);
+
+            // Reseta maquina de estados 
+            state = PORT1_IDLE;
+            cooldown_until_ms = now_ms() + 1000; // aguarda 1s 
+            response_len = 0;
+
+            watchdog_feed(&wdt);
+
+            g_needs_reconfig = 0;
+            printf("[RECONFIG] Iniciando retransmissão do arquivo de configuração...\n");
+        }
+
         struct pollfd fds[5];
         int nfds = 0;
 

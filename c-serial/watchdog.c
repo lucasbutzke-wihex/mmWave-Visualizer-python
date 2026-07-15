@@ -9,6 +9,8 @@
 
 #include "watchdog.h"
 
+extern volatile int g_needs_reconfig; //para avisar software do reset fisico
+
 static struct gpiod_chip *chip = NULL;
 static struct gpiod_line_settings *settings = NULL;
 static struct gpiod_line_config *line_cfg = NULL;
@@ -125,6 +127,8 @@ void* _watchdog_monitor(void *arg)
         if (time_since_last_feed > wdt->timeout) 
         {
             _watchdog_force_reset(wdt->gpio_offset);
+
+            g_needs_reconfig = 1;
             
             pthread_mutex_lock(&wdt->lock);
             wdt->last_heartbeat = _get_current_time() + 3.0; //3s ate proximo reset ser possivel
