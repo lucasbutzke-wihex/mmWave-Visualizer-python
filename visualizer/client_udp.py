@@ -2,135 +2,76 @@ import sys
 import socket
 import struct
 import numpy as np
-
 from PyQt5 import QtCore, QtWidgets
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
-# Change this to match your Raspberry Pi's local network IP address
-SERVER_IP = "127.0.0.1"
+
+# --- Network & Radar Dimensions ---
+SERVER_IP = "192.168.1.7"
 SERVER_PORT = 5001
 MAGIC_WORD = b'\x02\x01\x04\x03\x06\x05\x08\x07'
 
 NUM_RANGE_BINS = 512
 NUM_DOPPLER_BINS = 16
 
-PKT_TYPE_CLI_RESP = 1
-PKT_TYPE_RADAR = 2
-PKT_TYPE_SYSTEM = 99
-
 
 class RadarNetworkWorker(QtCore.QThread):
     range_profile_signal = QtCore.pyqtSignal(np.ndarray)
     heatmap_signal = QtCore.pyqtSignal(np.ndarray)
 
-    HEADER_STRUCT = struct.Struct('!III')
-
     def __init__(self):
         super().__init__()
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.settimeout(1.0)
         self.running = True
-        self.net_buffer = bytearray()
         self.data_buffer = bytearray()
+        self.header_struct = struct.Struct('!III')
 
     def run(self):
-        try:
-            self.sock.connect((SERVER_IP, SERVER_PORT))
-        except OSError as e:
-            print(f"[TCP] Connection failed: {e}")
-            return
-
-        print(f"[TCP] Connected to {SERVER_IP}:{SERVER_PORT}")
-
-        try:
-            self.sock.sendall(b"RESET\n")
-        except OSError as e:
-            print(f"[TCP] Failed to send initial RESET: {e}")
-            return
+        self.sock.sendto(b"RESET\n", (SERVER_IP, SERVER_PORT))
 
         while self.running:
             try:
-                chunk = self.sock.recv(8192)
-                if not chunk:
-                    print("[TCP] Server closed the connection.")
-                    break
-                self.net_buffer.extend(chunk)
-                self.process_net_buffer()
+                packet, _ = self.sock.recvfrom(8192)
+                if len(packet) < self.header_struct.size:
+                    continue
+
+                p_type, _, p_len = self.header_struct.unpack(packet[:self.header_struct.size])
+                payload = packet[self.header_struct.size: self.header_struct.size + p_len]
+
+                if p_type == 99:
+                    self.data_buffer = bytearray()
+                elif p_type == 2:
+                    self.data_buffer.extend(payload)
+                    self.parse_buffer()
 
             except socket.timeout:
-                try:
-                    self.sock.sendall(b"\n")
-                except OSError as e:
-                    print(f"[TCP] Keepalive send failed: {e}")
-                    break
-
+                self.sock.sendto(b"\n", (SERVER_IP, SERVER_PORT))
             except Exception as e:
-                print(f"[TCP] Network error: {e}")
-                break
-
-        self.sock.close()
-
-    def process_net_buffer(self):
-        offset = 0
-        n = len(self.net_buffer)
-
-        while True:
-            if n - offset < self.HEADER_STRUCT.size:
-                break
-
-            p_type, _seq, p_len = self.HEADER_STRUCT.unpack_from(self.net_buffer, offset)
-            total_len = self.HEADER_STRUCT.size + p_len
-
-            if n - offset < total_len:
-                break
-
-            payload_start = offset + self.HEADER_STRUCT.size
-            payload = bytes(self.net_buffer[payload_start: payload_start + p_len])
-
-            self.handle_message(p_type, payload)
-            offset += total_len
-
-        if offset:
-            del self.net_buffer[:offset]
-
-    def handle_message(self, p_type, payload):
-        if p_type == PKT_TYPE_SYSTEM:
-            self.data_buffer = bytearray()
-        elif p_type == PKT_TYPE_RADAR:
-            self.data_buffer.extend(payload)
-            self.parse_buffer()
-        elif p_type == PKT_TYPE_CLI_RESP:
-            try:
-                print(f"[CLI] {payload.decode(errors='replace')}")
-            except Exception:
-                pass
+                print(f"Network error: {e}")
 
     def parse_buffer(self):
-        offset = 0
-        n = len(self.data_buffer)
-
-        while n - offset >= 48:
-            magic_idx = self.data_buffer.find(MAGIC_WORD, offset)
+        while len(self.data_buffer) >= 48:
+            magic_idx = self.data_buffer.find(MAGIC_WORD)
             if magic_idx == -1:
-                if n - offset > 32:
-                    offset = n - 7
+                if len(self.data_buffer) > 32:
+                    self.data_buffer = self.data_buffer[-7:]
                 break
 
-            if n - magic_idx < 16:
+            if magic_idx > 0:
+                self.data_buffer = self.data_buffer[magic_idx:]
+
+            if len(self.data_buffer) < 16:
                 break
 
-            total_packet_len = struct.unpack_from('<I', self.data_buffer, magic_idx + 12)[0]
-            if n - magic_idx < total_packet_len:
+            total_packet_len = struct.unpack('<I', self.data_buffer[12:16])[0]
+            if len(self.data_buffer) < total_packet_len:
                 break
 
-            frame_bytes = bytes(self.data_buffer[magic_idx: magic_idx + total_packet_len])
+            frame_bytes = self.data_buffer[:total_packet_len]
+            self.data_buffer = self.data_buffer[total_packet_len:]
             self.extract_tlvs(frame_bytes)
-
-            offset = magic_idx + total_packet_len
-
-        if offset:
-            del self.data_buffer[:offset]
 
     def extract_tlvs(self, frame_bytes):
         header_format = '<QIIIIIIII'
@@ -148,6 +89,12 @@ class RadarNetworkWorker(QtCore.QThread):
             tlv_type, tlv_len = struct.unpack('<II', frame_bytes[pointer: pointer + 8])
             data_ptr = pointer + 8
 
+            # tlv_len is the PAYLOAD length only (it does NOT include the
+            # 8-byte type+length TLV header). This must match the pointer
+            # advance below (`pointer += 8 + tlv_len`) -- previously this
+            # line subtracted 8 from tlv_len here, which silently chopped
+            # the last 4 uint16 samples off of every single TLV (including
+            # the heatmap), corrupting/zero-padding the reshaped matrix.
             payload = frame_bytes[data_ptr: data_ptr + tlv_len]
 
             print(f"Extracted TLV Type: {tlv_type}, Length: {tlv_len}, "
@@ -157,14 +104,18 @@ class RadarNetworkWorker(QtCore.QThread):
                 arr = np.frombuffer(payload, dtype=np.uint16)
                 self.range_profile_signal.emit(arr.copy())
 
-            elif tlv_type == 5:
-                expected_elements = NUM_RANGE_BINS * NUM_DOPPLER_BINS
-                expected_bytes = expected_elements * 2
+            elif tlv_type == 5:  # Heatmap matrix target array handling
+                expected_elements = NUM_RANGE_BINS * NUM_DOPPLER_BINS  # 512 * 16 = 8192
+                expected_bytes = expected_elements * 2                 # uint16 -> 16384 bytes
 
                 if len(payload) != expected_bytes:
                     print(f"  [WARN] Heatmap TLV size mismatch: got {len(payload)} bytes, "
-                          f"expected {expected_bytes} bytes (tlv_len={tlv_len}).")
+                          f"expected {expected_bytes} bytes "
+                          f"(tlv_len={tlv_len}). Check NUM_RANGE_BINS/NUM_DOPPLER_BINS "
+                          f"against your .cfg, and confirm tlv_len semantics with the server.")
 
+                # Bound the payload to what we need, then pad with zeros if short
+                # so a partial/corrupt frame doesn't crash the reshape.
                 truncated_payload = payload[:expected_bytes]
                 matrix_flat = np.frombuffer(truncated_payload, dtype=np.uint16)
 
@@ -174,24 +125,16 @@ class RadarNetworkWorker(QtCore.QThread):
                     matrix_flat = padded_array
 
                 matrix_2d = matrix_flat.reshape((NUM_RANGE_BINS, NUM_DOPPLER_BINS))
+
                 shifted_matrix = np.fft.fftshift(matrix_2d, axes=1)
                 log_matrix = np.log10(shifted_matrix + 1)
 
                 self.heatmap_signal.emit(log_matrix.copy())
 
-            # Move pointer forward across header and payload
             pointer += 8 + tlv_len
-            
-            # Form padding calculation based on a strict 4-byte architectural boundary rules
-            if pointer % 4 != 0:
-                pointer += (4 - (pointer % 4))
 
     def stop(self):
         self.running = False
-        try:
-            self.sock.shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
         self.wait()
 
 

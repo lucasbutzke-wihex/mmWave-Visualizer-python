@@ -211,14 +211,13 @@ This project is released under the MIT License unless stated otherwise.
 
 ---
 
-## Authors
+## Author
 
 **Lucas Butzke**
 
 GitHub:
 https://github.com/lucasbutzke-wihex
 
-**Luara**
 ---
 
 ## Acknowledgments
