@@ -273,7 +273,9 @@ int main() {
     int fd2 = configure_serial_port(port2_path, baud2);
     int sock_fd = setup_udp_server(UDP_SERVER_PORT);
 
-    if (fd1 < 0 || fd2 < 0 || sock_fd < 0) {
+    if (fd1 < 0 || 
+        fd2 < 0 || 
+        sock_fd < 0) {
         fprintf(stderr, "Initialization failed.\n");
         return EXIT_FAILURE;
     }
